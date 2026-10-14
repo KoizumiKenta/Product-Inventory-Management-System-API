@@ -1,0 +1,681 @@
+openapi: 3.0.3
+info:
+  title: Inventory API
+  version: '1.0'
+  description: |
+    Products, the categories they belong to and the suppliers that provide them.
+
+    Everything except `/register` and `/login` needs a Sanctum token sent as
+    `Authorization: Bearer <token>`. Send `Accept: application/json` so validation
+    errors come back as JSON.
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local (artisan serve or the docker stack)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+  - name: Products
+  - name: Catalog
+
+paths:
+  /register:
+    post:
+      tags: [Auth]
+      summary: Create an account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, password_confirmation]
+              properties:
+                name:
+                  type: string
+                  maxLength: 255
+                  example: Dana Lim
+                email:
+                  type: string
+                  format: email
+                  maxLength: 255
+                  example: dana@example.com
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                  example: secret123
+                password_confirmation:
+                  type: string
+                  format: password
+                  example: secret123
+      responses:
+        '201':
+          description: Account created, token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /login:
+    post:
+      tags: [Auth]
+      summary: Exchange credentials for a token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: admin@example.com
+                password:
+                  type: string
+                  format: password
+                  example: password
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '422':
+          description: Unknown email or wrong password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                message: These credentials do not match our records.
+                errors:
+                  email: [These credentials do not match our records.]
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the token used for this request
+      responses:
+        '204':
+          description: Token revoked
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /me:
+    get:
+      tags: [Auth]
+      summary: The authenticated user
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /categories:
+    get:
+      tags: [Catalog]
+      summary: All categories with a product count
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /suppliers:
+    get:
+      tags: [Catalog]
+      summary: Suppliers, 50 per page
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Supplier'
+                  links:
+                    $ref: '#/components/schemas/PaginationLinks'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /products:
+    get:
+      tags: [Products]
+      summary: List products
+      description: Filters combine with AND. Results are cached for five minutes and flushed on any write.
+      parameters:
+        - name: category_id
+          in: query
+          schema:
+            type: integer
+          example: 3
+        - name: min_price
+          in: query
+          schema:
+            type: number
+            minimum: 0
+          example: 20
+        - name: max_price
+          in: query
+          schema:
+            type: number
+            minimum: 0
+          example: 500
+        - name: stock_status
+          in: query
+          schema:
+            type: string
+            enum: [in_stock, low_stock, out_of_stock]
+        - name: search
+          in: query
+          description: Matches name or sku.
+          schema:
+            type: string
+            maxLength: 100
+        - name: sort
+          in: query
+          description: Prefix with `-` for descending. Defaults to newest first.
+          schema:
+            type: string
+            enum:
+              - name
+              - -name
+              - price
+              - -price
+              - stock_quantity
+              - -stock_quantity
+              - created_at
+              - -created_at
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 15
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      tags: [Products]
+      summary: Create a product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoreProduct'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /products/{product}:
+    parameters:
+      - name: product
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Products]
+      summary: Show a product
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Products]
+      summary: Update a product
+      description: Partial update. Only the fields you send are touched, and `suppliers` is only re-synced when the key is present.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProduct'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    patch:
+      tags: [Products]
+      summary: Update a product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProduct'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Products]
+      summary: Soft delete a product
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /products/{id}/restore:
+    post:
+      tags: [Products]
+      summary: Restore a soft deleted product
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Restored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: No deleted product with that id
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  responses:
+    Unauthenticated:
+      description: Missing or revoked token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Message'
+          example:
+            message: Unauthenticated.
+    NotFound:
+      description: No record with that id
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Message'
+    TooManyRequests:
+      description: Rate limit hit (10 requests a minute on the auth routes, 60 elsewhere)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Message'
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationError'
+
+  schemas:
+    Message:
+      type: object
+      properties:
+        message:
+          type: string
+
+    ValidationError:
+      type: object
+      properties:
+        message:
+          type: string
+          example: The sku has already been taken.
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            sku: [The sku has already been taken.]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Demo Admin
+        email:
+          type: string
+          format: email
+          example: admin@example.com
+
+    TokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          example: 4|Yx2qGZ0hV1pKmJ8r9tLdWcN3bQsA7fE6uT5iO0pX
+        user:
+          $ref: '#/components/schemas/User'
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 3
+        name:
+          type: string
+          example: Office Supplies
+        slug:
+          type: string
+          example: office-supplies
+        products_count:
+          type: integer
+          description: Only present on the categories endpoint.
+          example: 12
+
+    Supplier:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 7
+        name:
+          type: string
+          example: Harper and Sons
+        email:
+          type: string
+          format: email
+          example: sales@harper.test
+        phone:
+          type: string
+          nullable: true
+          example: '+60 3 2719 4410'
+        unit_cost:
+          type: string
+          nullable: true
+          description: What this supplier charges for the product. Only present when the supplier is nested in a product.
+          example: '18.40'
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 42
+        name:
+          type: string
+          example: Mechanical Keyboard
+        sku:
+          type: string
+          example: KBD-10293
+        description:
+          type: string
+          nullable: true
+        price:
+          type: string
+          description: Decimal with two places, serialised as a string.
+          example: '249.90'
+        stock_quantity:
+          type: integer
+          example: 8
+        stock_status:
+          type: string
+          enum: [in_stock, low_stock, out_of_stock]
+          description: Derived from stock_quantity. 0 is out_of_stock, 1 to 10 is low_stock.
+          example: low_stock
+        category:
+          $ref: '#/components/schemas/Category'
+        suppliers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Supplier'
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: '2026-10-14T09:12:44.000000Z'
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: '2026-10-14T09:12:44.000000Z'
+
+    ProductEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Product'
+
+    ProductPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Product'
+        links:
+          $ref: '#/components/schemas/PaginationLinks'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    SupplierInput:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: integer
+          example: 7
+        unit_cost:
+          type: number
+          nullable: true
+          minimum: 0
+          example: 18.4
+
+    StoreProduct:
+      type: object
+      required: [category_id, name, sku, price, stock_quantity]
+      properties:
+        category_id:
+          type: integer
+          example: 3
+        name:
+          type: string
+          maxLength: 255
+          example: Mechanical Keyboard
+        sku:
+          type: string
+          maxLength: 50
+          description: Stored uppercase and trimmed.
+          example: KBD-10293
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        price:
+          type: number
+          minimum: 0
+          maximum: 99999999.99
+          example: 249.9
+        stock_quantity:
+          type: integer
+          minimum: 0
+          maximum: 999999
+          example: 8
+        suppliers:
+          type: array
+          description: Replaces the whole supplier list for the product.
+          items:
+            $ref: '#/components/schemas/SupplierInput'
+
+    UpdateProduct:
+      type: object
+      properties:
+        category_id:
+          type: integer
+        name:
+          type: string
+          maxLength: 255
+        sku:
+          type: string
+          maxLength: 50
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        price:
+          type: number
+          minimum: 0
+          maximum: 99999999.99
+        stock_quantity:
+          type: integer
+          minimum: 0
+          maximum: 999999
+        suppliers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupplierInput'
+
+    PaginationLinks:
+      type: object
+      properties:
+        first:
+          type: string
+          nullable: true
+        last:
+          type: string
+          nullable: true
+        prev:
+          type: string
+          nullable: true
+        next:
+          type: string
+          nullable: true
+
+    PaginationMeta:
+      type: object
+      properties:
+        current_page:
+          type: integer
+          example: 1
+        from:
+          type: integer
+          nullable: true
+          example: 1
+        last_page:
+          type: integer
+          example: 4
+        path:
+          type: string
+        per_page:
+          type: integer
+          example: 15
+        to:
+          type: integer
+          nullable: true
+          example: 15
+        total:
+          type: integer
+          example: 60
+        links:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+                nullable: true
+              label:
+                type: string
+              active:
+                type: boolean
